@@ -7,10 +7,13 @@ import folium
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import MakePipeline
 
 # ================== ตั้งค่าหน้าเว็บ ==================
 st.set_page_config(
-    page_title="DisasterOps Thailand | ศูนย์ปฏิบัติการภัยพิบัติอัจฉริยะ",
+    page_title="DisasterOps ML | ศูนย์ปฏิบัติการภัยพิบัติอัจฉริยะ",
     page_icon="🛡️",
     layout="wide",
 )
@@ -30,6 +33,7 @@ html, body, .stApp, [class*="css"] {font-family:'Sarabun',sans-serif;}
 .kpi .sub {font-size:13px;color:#98a2b3;}
 .alert-bar {background:#fff4f4;border:1px solid #fecdca;border-left:6px solid #d92d20;color:#7a271a;padding:12px 16px;border-radius:10px;margin:14px 0;}
 .hotspot-bar {background:#fffbeb;border:1px solid #fedf89;border-left:6px solid #f79009;color:#b54708;padding:12px 16px;border-radius:10px;margin:14px 0;}
+.ml-box {background:#f0f4f8;border:1px solid #d0d7de;border-left:6px solid #1565c0;padding:12px 16px;border-radius:10px;margin:14px 0;font-size:14px;color:#1e293b;}
 .feed {background:#fff;border:1px solid #e6eaf0;border-radius:12px;padding:14px;margin-bottom:12px;color:#101828;}
 .feed .meta {color:#98a2b3;font-size:12px;}
 .pill {display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;color:#fff;margin-right:4px;}
@@ -72,24 +76,6 @@ ALIASES = {"กทม": "กรุงเทพมหานคร", "กรุง
            "อยุธยา": "พระนครศรีอยุธยา", "หาดใหญ่": "สงขลา", "พัทยา": "ชลบุรี",
            "เกาะสมุย": "สุราษฎร์ธานี", "หัวหิน": "ประจวบคีรีขันธ์"}
 
-DISASTER_RULES = [
-    ("วาตภัย / พายุ", ["พายุ", "ลมแรง", "ลมกระโชก", "วาตภัย", "หลังคาปลิว", "ต้นไม้ล้ม"]),
-    ("ดินถล่ม", ["ดินถล่ม", "ดินสไลด์", "โคลน", "ภูเขา"]),
-    ("อัคคีภัย / ไฟป่า", ["ไฟไหม้", "ไฟป่า", "เพลิง", "ควัน"]),
-    ("อุทกภัย / น้ำท่วม", ["น้ำท่วม", "น้ำป่า", "น้ำล้น", "ท่วม", "ฝนตกหนัก", "น้ำขึ้น"]),
-]
-NEEDS_RULES = {
-    "เรืออพยพ": ["เรือ", "อพยพ", "ย้ายออก", "รับคน"],
-    "อาหารและน้ำดื่ม": ["อาหาร", "ข้าว", "น้ำดื่ม", "หิว", "เสบียง"],
-    "แพทย์และยา": ["ป่วย", "ยา", "หมอ", "ติดเตียง", "บาดเจ็บ", "โรงพยาบาล"],
-    "ถุงยังชีพ": ["ถุงยังชีพ", "เดือดร้อน", "ของใช้"],
-    "ที่พักพิง": ["ที่พัก", "ศูนย์พักพิง", "บ้านพัง", "เสียหาย"],
-}
-CRITICAL_WORDS = ["ช่วยด้วย", "ติดอยู่", "ติดค้าง", "จมน้ำ", "บนหลังคา", "ชั้น 2", "ชั้นสอง",
-                  "ติดเตียง", "หมดสติ", "สาหัส", "เสียชีวิต", "ฉุกเฉิน", "วิกฤต"]
-URGENT_WORDS = ["ด่วน", "อพยพ", "ผู้สูงอายุ", "คนชรา", "เด็กเล็ก", "ไม่มีอาหาร",
-                "น้ำขึ้นเร็ว", "ไฟดับ", "ตัดขาด", "บาดเจ็บ"]
-
 PRIORITY_HEX = {"วิกฤต": "#d92d20", "เร่งด่วน": "#f79009", "เฝ้าระวัง": "#1570ef"}
 STATUSES = ["รอรับเรื่อง", "กำลังช่วยเหลือ", "ดำเนินการเสร็จสิ้น"]
 COLUMNS = ["ID", "Time", "Province", "Type", "Priority", "Needs", "Status", "Reporter", "Text", "lat", "lon", "Image"]
@@ -98,7 +84,55 @@ THAI_COLS = {"ID": "รหัสเหตุ", "Time": "เวลา", "Province
              "Reporter": "ผู้แจ้ง", "Text": "รายละเอียด"}
 
 
-# ================== ระบบวิเคราะห์ข้อความ ==================
+# ================== เทรน Machine Learning Model (Text Classification) ==================
+@st.cache_resource
+def train_ml_models():
+    # ชุดข้อมูลตัวอย่างสำหรับสอนโมเดล (Training Data)
+    train_texts = [
+        "ช่วยด้วย น้ำท่วมสูงถึงชั้น 2 ติดอยู่บนหลังคา ต้องการเรืออพยพด่วน",
+        "น้ำป่าไหลหลากเข้าหมู่บ้าน คนติดค้าง ผู้ป่วยติดเตียง",
+        "พายุลมแรง พัดหลังคาบ้านพังเสียหาย ต้นไม้ล้มทับเส้นทาง",
+        "วาตภัยพายุฤดูร้อน เสาไฟฟ้าล้ม",
+        "ไฟไหม้บ้านเรือนประชาชน เพลิงลุกไหม้รุนแรง ลามเข้าป่า",
+        "ไฟป่าลุกลามใกล้ชุมชน ควันหนาแน่น",
+        "ดินถล่มปิดทับถนนดินสไลด์ลงมาทับบ้านเรือน",
+        "โคลนถล่มจากภูเขา หลังฝนตกหนักต่อเนื่อง",
+        "ฝนตกหนักน้ำท่วมขังรอการระบาย การจราจรติดขัด",
+        "เฝ้าระวังระดับน้ำในแม่น้ำเพิ่มสูงขึ้น",
+        "ไม่มีอาหารและน้ำดื่ม ขาดแคลนเสบียง",
+        "ต้องการทีมแพทย์และยาช่วยเหลือผู้ป่วยฉุกเฉิน",
+    ]
+    train_types = [
+        "อุทกภัย / น้ำท่วม", "อุทกภัย / น้ำท่วม",
+        "วาตภัย / พายุ", "วาตภัย / พายุ",
+        "อัคคีภัย / ไฟป่า", "อัคคีภัย / ไฟป่า",
+        "ดินถล่ม", "ดินถล่ม",
+        "อุทกภัย / น้ำท่วม", "อุทกภัย / น้ำท่วม",
+        "อื่น ๆ / ทั่วไป", "อื่น ๆ / ทั่วไป"
+    ]
+    train_priorities = [
+        "วิกฤต", "วิกฤต",
+        "เร่งด่วน", "เร่งด่วน",
+        "วิกฤต", "เร่งด่วน",
+        "วิกฤต", "เร่งด่วน",
+        "เฝ้าระวัง", "เฝ้าระวัง",
+        "เร่งด่วน", "วิกฤต"
+    ]
+
+    # สร้าง Pipeline แยกประเภทภัย (Type Classifier)
+    type_model = MakePipeline(TfidfVectorizer(), LogisticRegression())
+    type_model.fit(train_texts, train_types)
+
+    # สร้าง Pipeline จัดระดับความรุนแรง (Priority Classifier)
+    prio_model = MakePipeline(TfidfVectorizer(), LogisticRegression())
+    prio_model.fit(train_texts, train_priorities)
+
+    return type_model, prio_model
+
+ml_type_clf, ml_prio_clf = train_ml_models()
+
+
+# ================== ฟังก์ชันวิเคราะห์ด้วย ML ==================
 def detect_province(text):
     for name in sorted(PROVINCES, key=len, reverse=True):
         if name in text:
@@ -108,20 +142,26 @@ def detect_province(text):
             return prov
     return None
 
-def analyze(text):
+def analyze_with_ml(text):
+    # ให้ Machine Learning ทำนายประเภทภัยและความรุนแรง
+    pred_type = ml_type_clf.predict([text])[0]
+    pred_prio = ml_prio_clf.predict([text])[0]
+
+    # วิเคราะห์ความต้องการ (Needs) จาก Keyword พื้นฐานประกอบ
     t = text.lower()
-    dtype = next((name for name, kws in DISASTER_RULES if any(k in t for k in kws)), "อื่น ๆ / ทั่วไป")
-    needs = [n for n, kws in NEEDS_RULES.items() if any(k in t for k in kws)]
-    if any(w in t for w in CRITICAL_WORDS):
-        priority = "วิกฤต"
-    elif any(w in t for w in URGENT_WORDS):
-        priority = "เร่งด่วน"
-    else:
-        priority = "เฝ้าระวัง"
-    return dtype, priority, (", ".join(needs) if needs else "เฝ้าระวังทั่วไป")
+    needs_rules = {
+        "เรืออพยพ": ["เรือ", "อพยพ", "ย้ายออก", "หลังคา"],
+        "อาหารและน้ำดื่ม": ["อาหาร", "ข้าว", "น้ำดื่ม", "หิว", "เสบียง"],
+        "แพทย์และยา": ["ป่วย", "ยา", "หมอ", "ติดเตียง", "บาดเจ็บ"],
+        "ถุงยังชีพ": ["ถุงยังชีพ", "เดือดร้อน", "เสียหาย"],
+        "ที่พักพิง": ["ที่พัก", "ศูนย์พักพิง", "บ้านพัง"],
+    }
+    needs = [n for n, kws in needs_rules.items() if any(k in t for k in kws)]
+    
+    return pred_type, pred_prio, (", ".join(needs) if needs else "เฝ้าระวังทั่วไป")
 
 def new_record(text, reporter="ประชาชนทั่วไป", province=None, status="รอรับเรื่อง", image=None):
-    dtype, priority, needs = analyze(text)
+    dtype, priority, needs = analyze_with_ml(text)
     detected = province or detect_province(text)
     prov = detected or "กรุงเทพมหานคร"
     lat, lon = PROVINCES[prov]
@@ -144,7 +184,7 @@ def build_map(data):
         color = PRIORITY_HEX[r["Priority"]]
         popup = (
             f"<div style='font-family:sans-serif;width:250px'>"
-            f"<b style='color:{color}'>{r['ID']} • {r['Priority']}</b><br>"
+            f"<b style='color:{color}'>{r['ID']} • {r['Priority']} (ML Predicted)</b><br>"
             f"<b>จังหวัด:</b> {r['Province']}<br>"
             f"<b>ประเภท:</b> {r['Type']}<br>"
             f"<b>ความต้องการ:</b> {r['Needs']}<br>"
@@ -179,8 +219,8 @@ if "incidents" not in st.session_state:
 df = pd.DataFrame(st.session_state.incidents, columns=COLUMNS)
 
 # ================== Sidebar ==================
-st.sidebar.markdown("## 🛡️ DisasterOps")
-st.sidebar.caption("ศูนย์ปฏิบัติการและเตือนภัยพิบัติอัจฉริยะ")
+st.sidebar.markdown("## 🛡️ DisasterOps ML")
+st.sidebar.caption("ระบบจำแนกภัยพิบัติด้วย Machine Learning")
 st.sidebar.divider()
 f_priority = st.sidebar.multiselect("ระดับความรุนแรง", list(PRIORITY_HEX), default=list(PRIORITY_HEX))
 f_status = st.sidebar.multiselect("สถานะการดำเนินงาน", STATUSES, default=STATUSES)
@@ -202,9 +242,9 @@ if f_keyword:
 # ================== Header ==================
 now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 st.markdown(
-    f'<div class="hero"><span class="badge">● LIVE SYSTEM</span><span class="badge">อัปเดตล่าสุด {now}</span>'
-    f'<h1>ศูนย์ปฏิบัติการและเตือนภัยพิบัติแห่งชาติ</h1>'
-    f'<p>National Disaster Operations Center — ระบบรับแจ้งเหตุ วิเคราะห์ AI แจ้งเตือนภัย และติดตามการช่วยเหลือ</p></div>',
+    f'<div class="hero"><span class="badge">🤖 ML ENGINE ACTIVE</span><span class="badge">อัปเดตล่าสุด {now}</span>'
+    f'<h1>ศูนย์ปฏิบัติการและเตือนภัยพิบัติแห่งชาติ (AI / ML)</h1>'
+    f'<p>National Disaster Operations Center — ขับเคลื่อนด้วยโมเดล Machine Learning (TF-IDF & Logistic Regression)</p></div>',
     unsafe_allow_html=True,
 )
 
@@ -224,11 +264,10 @@ def kpi(col, label, value, sub, color):
 
 k1, k2, k3, k4 = st.columns(4)
 kpi(k1, "เหตุการณ์ทั้งหมด", total, f"ใน {df['Province'].nunique()} จังหวัด", "#1565c0")
-kpi(k2, "ระดับวิกฤต", crit, "ต้องช่วยเหลือทันที", "#d92d20")
+kpi(k2, "ระดับวิกฤต (ML)", crit, "ต้องช่วยเหลือทันที", "#d92d20")
 kpi(k3, "กำลังช่วยเหลือ", active, "เจ้าหน้าที่ลงพื้นที่แล้ว", "#f79009")
 kpi(k4, "ดำเนินการเสร็จสิ้น", done, f"คิดเป็น {pct:.0f}% ของทั้งหมด", "#12b76a")
 
-# ฟีเจอร์เตือนภัยวิกฤต & Hotspot พื้นที่เสี่ยง
 pending_crit = df[(df["Priority"] == "วิกฤต") & (df["Status"] != "ดำเนินการเสร็จสิ้น")]
 if not pending_crit.empty:
     last = pending_crit.iloc[-1]
@@ -242,12 +281,12 @@ hotspots = df[df["Priority"] == "วิกฤต"]["Province"].value_counts()
 if not hotspots.empty and hotspots.iloc[0] >= 1:
     top_hotspot = hotspots.index[0]
     st.markdown(
-        f'<div class="hotspot-bar"><b>🚨 ระบบ AI วิเคราะห์พบพื้นที่เสี่ยงสูงสุด (Hotspot):</b> จังหวัด<b>{top_hotspot}</b> มีรายงานเคสวิกฤตสะสมสูงสุด ควรจัดสรรชุดปฏิบัติการเสริมด่วน</div>',
+        f'<div class="hotspot-bar"><b>🚨 ระบบ Machine Learning วิเคราะห์พบพื้นที่เสี่ยงสูงสุด (Hotspot):</b> จังหวัด<b>{top_hotspot}</b> มีรายงานเคสวิกฤตสะสมสูงสุด</div>',
         unsafe_allow_html=True,
     )
 
 # ================== Tabs ==================
-tab1, tab2, tab3, tab4 = st.tabs(["🗺️ ภาพรวมสถานการณ์", "📝 แจ้งเหตุใหม่", "📋 ฐานข้อมูลเหตุการณ์", "📈 สถิติและวิเคราะห์"])
+tab1, tab2, tab3, tab4 = st.tabs(["🗺️ ภาพรวมสถานการณ์", "📝 แจ้งเหตุ (ML Predict)", "📋 ฐานข้อมูลเหตุการณ์", "📈 สถิติและวิเคราะห์"])
 
 # ---------- Tab 1: แผนที่ + ฟีด ----------
 with tab1:
@@ -274,10 +313,13 @@ with tab1:
                 unsafe_allow_html=True,
             )
 
-# ---------- Tab 2: แจ้งเหตุ ----------
+# ---------- Tab 2: แจ้งเหตุด้วย ML ----------
 with tab2:
-    st.markdown("#### แบบฟอร์มรับแจ้งเหตุอัจฉริยะ")
-    st.caption("ระบบ AI จะวิเคราะห์ประเภทภัย ระดับความรุนแรง ความต้องการ และพิกัดจังหวัดให้อัตโนมัติ")
+    st.markdown("#### แบบฟอร์มรับแจ้งเหตุอัจฉริยะ (ขับเคลื่อนด้วย Machine Learning)")
+    st.markdown(
+        '<div class="ml-box"><b>💡 การทำงานของระบบ Machine Learning:</b> ข้อความที่คุณพิมพ์จะถูกส่งเข้าโมเดล <b>TF-IDF + Logistic Regression</b> เพื่อทำนายประเภทภัยและความรุนแรงโดยอัตโนมัติทันที</div>',
+        unsafe_allow_html=True,
+    )
     
     with st.form("report_form", clear_on_submit=True):
         text = st.text_area("รายละเอียดเหตุการณ์", height=130,
@@ -286,7 +328,7 @@ with tab2:
         prov_choice = a.selectbox("จังหวัด (เลือกเพื่อให้ระบบล็อกตำแหน่ง)", ["ตรวจจับอัตโนมัติจากข้อความ"] + list(PROVINCES))
         reporter = b.text_input("หน่วยงาน / ผู้แจ้ง (ไม่บังคับ)")
         uploaded_file = st.file_uploader("แนบรูปภาพหลักฐานความเสียหาย (ถ้ามี)", type=["jpg", "jpeg", "png"])
-        submitted = st.form_submit_button("🚀 ส่งรายงานเข้าศูนย์ปฏิบัติการ")
+        submitted = st.form_submit_button("🚀 ส่งรายงานให้ ML วิเคราะห์")
 
     if submitted:
         if not text.strip():
@@ -306,20 +348,19 @@ with tab2:
 
     if "last" in st.session_state:
         r = st.session_state.last
-        st.success(f"บันทึกเหตุ {r['ID']} เข้าสู่ระบบเรียบร้อยแล้ว!")
+        st.success(f"บันทึกเหตุ {r['ID']} สำเร็จ! (ผ่านการประมวลผลด้วย Machine Learning)")
         
-        # ฟีเจอร์จำลองการส่ง SMS/LINE Alert
         if r["Priority"] == "วิกฤต":
             if st.button("📲 จำลองส่ง SMS และ LINE Alert ไปยังทีมกู้ภัยด่วน"):
                 st.toast(f"ส่งการแจ้งเตือนเคส {r['ID']} ไปยังเครือข่ายกู้ภัยและผู้ว่าราชการจังหวัด {r['Province']} สำเร็จ!", icon="🚨")
         
         x1, x2, x3, x4 = st.columns(4)
         x1.metric("จังหวัด", r["Province"])
-        x2.metric("ประเภทภัย", r["Type"])
-        x3.metric("ระดับความรุนแรง", r["Priority"])
+        x2.metric("ประเภทภัย (ML Predicted)", r["Type"])
+        x3.metric("ระดับความรุนแรง (ML Predicted)", r["Priority"])
         x4.metric("ความต้องการ", r["Needs"].split(",")[0])
         if not r["_detected"]:
-            st.warning("ไม่พบชื่อจังหวัดในข้อความ ระบบจึงปักหมุดที่กรุงเทพมหานครแทน กรุณาเลือกจังหวัดในครั้งถัดไป")
+            st.warning("ไม่พบชื่อจังหวัดในข้อความ ระบบจึงปักหมุดที่กรุงเทพมหานครแทน")
 
 # ---------- Tab 3: ฐานข้อมูล ----------
 with tab3:
@@ -328,7 +369,7 @@ with tab3:
     h2.download_button(
         "ดาวน์โหลด CSV",
         fdf[list(THAI_COLS)].rename(columns=THAI_COLS).to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"disaster_report_{datetime.now():%Y%m%d_%H%M}.csv",
+        file_name=f"disaster_ml_report_{datetime.now():%Y%m%d_%H%M}.csv",
         mime="text/csv",
     )
     st.dataframe(fdf.drop(columns=["lat", "lon", "Image"], errors="ignore").iloc[::-1][list(THAI_COLS)].rename(columns=THAI_COLS), hide_index=True)
@@ -372,9 +413,6 @@ def donut_chart(data, field, scale):
         color=alt.Color("Label:N", scale=scale, legend=alt.Legend(title=None)),
         tooltip=[alt.Tooltip("Label:N", title="หมวด"), alt.Tooltip("Count:Q", title="จำนวน")],
     )
-    center = alt.Chart(alt.Data(values=[{}] )).mark_text(
-        fontSize=26, fontWeight="bold", color="#101828", text=f"{total_n} เหตุ"
-    ) # simple static text for center
     return style_chart(arc, 320)
 
 def hbar_chart(counts, scale=None, color="#1565c0"):
@@ -396,8 +434,8 @@ with tab4:
     if fdf.empty:
         st.info("ยังไม่มีข้อมูลสำหรับแสดงสถิติ")
     else:
-        st.markdown("#### ภาพรวมเชิงวิเคราะห์และ AI Insights")
-        st.caption("ข้อมูลวิเคราะห์เชิงลึกประมวลผลจากเงื่อนไขตัวกรองในแถบด้านซ้าย")
+        st.markdown("#### ภาพรวมเชิงวิเคราะห์ด้วย Machine Learning Insights")
+        st.caption("สถิติประมวลผลจากผลลัพธ์การจำแนกประเภทของโมเดล ML")
 
         f_total = len(fdf)
         f_done = int((fdf["Status"] == "ดำเนินการเสร็จสิ้น").sum())
@@ -410,7 +448,7 @@ with tab4:
         kpi(s1, "อัตราดำเนินการสำเร็จ", f"{f_rate:.0f}%", f"เสร็จแล้ว {f_done} จาก {f_total} เหตุ", "#12b76a")
         kpi(s2, "วิกฤตที่ยังค้างอยู่", f_crit_pending, "ต้องเร่งจัดสรรทีมช่วยเหลือ", "#d92d20")
         kpi(s3, "จังหวัดที่มีเหตุมากสุด", top_prov.index[0], f"{top_prov.iloc[0]} เหตุ", "#1565c0")
-        kpi(s4, "ภัยที่พบบ่อยที่สุด", top_type.index[0].split(" /")[0], f"{top_type.iloc[0]} เหตุ", "#7a5af8")
+        kpi(s4, "ภัยที่ ML ทำนายบ่อยสุด", top_type.index[0].split(" /")[0], f"{top_type.iloc[0]} เหตุ", "#7a5af8")
 
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
         st.progress(f_rate / 100, text=f"ความคืบหน้าการช่วยเหลือโดยรวม {f_rate:.0f}%")
@@ -418,7 +456,7 @@ with tab4:
         r1a, r1b = st.columns(2)
         with r1a:
             with st.container(border=True):
-                st.markdown("**สัดส่วนระดับความรุนแรง**")
+                st.markdown("**สัดส่วนระดับความรุนแรง (ML Classification)**")
                 st.altair_chart(donut_chart(fdf, "Priority", PRIO_SCALE))
         with r1b:
             with st.container(border=True):
@@ -428,7 +466,7 @@ with tab4:
         r2a, r2b = st.columns([3, 2])
         with r2a:
             with st.container(border=True):
-                st.markdown("**10 จังหวัดที่มีเหตุมากที่สุด (แยกตามความรุนแรง)**")
+                st.markdown("**10 จังหวัดที่มีเหตุมากที่สุด**")
                 top10 = top_prov.head(10).index.tolist()
                 pc = (fdf[fdf["Province"].isin(top10)]
                       .groupby(["Province", "Priority"]).size().reset_index(name="Count"))
@@ -443,7 +481,7 @@ with tab4:
                 st.altair_chart(style_chart(prov_chart, max(200, 44 * len(top10))))
         with r2b:
             with st.container(border=True):
-                st.markdown("**ประเภทภัยพิบัติ**")
+                st.markdown("**ประเภทภัยพิบัติ (ML Predicted)**")
                 tc = top_type.reset_index()
                 tc.columns = ["Label", "Count"]
                 st.altair_chart(hbar_chart(tc, scale=TYPE_SCALE))
@@ -483,5 +521,5 @@ with tab4:
                     },
                 )
 
-st.markdown('<div class="footer">© 2026 DisasterOps Thailand • ระบบปฏิบัติการอัจฉริยะเพื่อการสาธิต • ข้อมูลจำลอง</div>',
+st.markdown('<div class="footer">© 2026 DisasterOps ML Thailand • ระบบปฏิบัติการอัจฉริยะขับเคลื่อนด้วย Machine Learning</div>',
             unsafe_allow_html=True)
