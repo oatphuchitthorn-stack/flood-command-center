@@ -1,8 +1,8 @@
-import altair as alt
 import html
 import random
 from datetime import datetime
 
+import altair as alt
 import folium
 import pandas as pd
 import streamlit as st
@@ -10,7 +10,7 @@ import streamlit.components.v1 as components
 
 # ================== ตั้งค่าหน้าเว็บ ==================
 st.set_page_config(
-    page_title="DisasterOps Thailand | ศูนย์ปฏิบัติการภัยพิบัติ",
+    page_title="DisasterOps Thailand | ศูนย์ปฏิบัติการภัยพิบัติอัจฉริยะ",
     page_icon="🛡️",
     layout="wide",
 )
@@ -29,7 +29,8 @@ html, body, .stApp, [class*="css"] {font-family:'Sarabun',sans-serif;}
 .kpi .value {font-size:34px;font-weight:700;line-height:1.2;}
 .kpi .sub {font-size:13px;color:#98a2b3;}
 .alert-bar {background:#fff4f4;border:1px solid #fecdca;border-left:6px solid #d92d20;color:#7a271a;padding:12px 16px;border-radius:10px;margin:14px 0;}
-.feed {background:#fff;border:1px solid #e6eaf0;border-radius:12px;padding:12px 14px;margin-bottom:10px;color:#101828;}
+.hotspot-bar {background:#fffbeb;border:1px solid #fedf89;border-left:6px solid #f79009;color:#b54708;padding:12px 16px;border-radius:10px;margin:14px 0;}
+.feed {background:#fff;border:1px solid #e6eaf0;border-radius:12px;padding:14px;margin-bottom:12px;color:#101828;}
 .feed .meta {color:#98a2b3;font-size:12px;}
 .pill {display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;color:#fff;margin-right:4px;}
 .pill-gray {background:#eaecf0;color:#344054;}
@@ -91,7 +92,7 @@ URGENT_WORDS = ["ด่วน", "อพยพ", "ผู้สูงอายุ"
 
 PRIORITY_HEX = {"วิกฤต": "#d92d20", "เร่งด่วน": "#f79009", "เฝ้าระวัง": "#1570ef"}
 STATUSES = ["รอรับเรื่อง", "กำลังช่วยเหลือ", "ดำเนินการเสร็จสิ้น"]
-COLUMNS = ["ID", "Time", "Province", "Type", "Priority", "Needs", "Status", "Reporter", "Text", "lat", "lon"]
+COLUMNS = ["ID", "Time", "Province", "Type", "Priority", "Needs", "Status", "Reporter", "Text", "lat", "lon", "Image"]
 THAI_COLS = {"ID": "รหัสเหตุ", "Time": "เวลา", "Province": "จังหวัด", "Type": "ประเภทภัย",
              "Priority": "ระดับ", "Needs": "ความต้องการ", "Status": "สถานะ",
              "Reporter": "ผู้แจ้ง", "Text": "รายละเอียด"}
@@ -107,7 +108,6 @@ def detect_province(text):
             return prov
     return None
 
-
 def analyze(text):
     t = text.lower()
     dtype = next((name for name, kws in DISASTER_RULES if any(k in t for k in kws)), "อื่น ๆ / ทั่วไป")
@@ -120,8 +120,7 @@ def analyze(text):
         priority = "เฝ้าระวัง"
     return dtype, priority, (", ".join(needs) if needs else "เฝ้าระวังทั่วไป")
 
-
-def new_record(text, reporter="ประชาชนทั่วไป", province=None, status="รอรับเรื่อง"):
+def new_record(text, reporter="ประชาชนทั่วไป", province=None, status="รอรับเรื่อง", image=None):
     dtype, priority, needs = analyze(text)
     detected = province or detect_province(text)
     prov = detected or "กรุงเทพมหานคร"
@@ -133,6 +132,7 @@ def new_record(text, reporter="ประชาชนทั่วไป", provinc
         "Province": prov, "Type": dtype, "Priority": priority, "Needs": needs,
         "Status": status, "Reporter": reporter or "ประชาชนทั่วไป", "Text": text,
         "lat": lat + random.uniform(-0.04, 0.04), "lon": lon + random.uniform(-0.04, 0.04),
+        "Image": image,
         "_detected": detected is not None,
     }
 
@@ -154,12 +154,8 @@ def build_map(data):
         )
         folium.CircleMarker(
             location=[r["lat"], r["lon"]],
-            radius=11,
-            color="#ffffff",
-            weight=2,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.9,
+            radius=11, color="#ffffff", weight=2, fill=True,
+            fill_color=color, fill_opacity=0.9,
             popup=folium.Popup(popup, max_width=320),
             tooltip=f"{r['ID']} • {r['Province']} ({r['Priority']})",
         ).add_to(m)
@@ -171,20 +167,20 @@ if "incidents" not in st.session_state:
     st.session_state.counter = 0
     st.session_state.incidents = []
     samples = [
-        ("ช่วยด้วย น้ำท่วมสูงถึงชั้น 2 อำเภอเมือง จังหวัดเชียงใหม่ มีผู้ป่วยติดเตียง ต้องการเรืออพยพ", "อปพร. เชียงใหม่", "กำลังช่วยเหลือ"),
-        ("น้ำป่าไหลหลากเข้าหมู่บ้าน อำเภอหาดใหญ่ จังหวัดสงขลา ชาวบ้านต้องการอาหารและน้ำดื่มด่วน", "ประชาชนทั่วไป", "รอรับเรื่อง"),
-        ("พายุลมแรง บ้านเรือนเสียหายหลายหลัง จังหวัดอุบลราชธานี", "อบต. ในพื้นที่", "ดำเนินการเสร็จสิ้น"),
-        ("เฝ้าระวังดินสไลด์หลังฝนตกต่อเนื่อง จังหวัดน่าน", "สำนักงาน ปภ. น่าน", "รอรับเรื่อง"),
-        ("ฝนตกหนัก น้ำท่วมขังถนนหลายสายในกรุงเทพมหานคร", "ศูนย์ข่าว กทม.", "กำลังช่วยเหลือ"),
+        ("ช่วยด้วย น้ำท่วมสูงถึงชั้น 2 อำเภอเมือง จังหวัดเชียงใหม่ มีผู้ป่วยติดเตียง ต้องการเรืออพยพ", "อปพร. เชียงใหม่", "กำลังช่วยเหลือ", None),
+        ("น้ำป่าไหลหลากเข้าหมู่บ้าน อำเภอหาดใหญ่ จังหวัดสงขลา ชาวบ้านต้องการอาหารและน้ำดื่มด่วน", "ประชาชนทั่วไป", "รอรับเรื่อง", None),
+        ("พายุลมแรง บ้านเรือนเสียหายหลายหลัง จังหวัดอุบลราชธานี", "อบต. ในพื้นที่", "ดำเนินการเสร็จสิ้น", None),
+        ("เฝ้าระวังดินสไลด์หลังฝนตกต่อเนื่อง จังหวัดน่าน", "สำนักงาน ปภ. น่าน", "รอรับเรื่อง", None),
+        ("ฝนตกหนัก น้ำท่วมขังถนนหลายสายในกรุงเทพมหานคร", "ศูนย์ข่าว กทม.", "กำลังช่วยเหลือ", None),
     ]
-    for s_text, s_reporter, s_status in samples:
-        st.session_state.incidents.append(new_record(s_text, s_reporter, status=s_status))
+    for s_text, s_reporter, s_status, s_img in samples:
+        st.session_state.incidents.append(new_record(s_text, s_reporter, status=s_status, image=s_img))
 
 df = pd.DataFrame(st.session_state.incidents, columns=COLUMNS)
 
 # ================== Sidebar ==================
 st.sidebar.markdown("## 🛡️ DisasterOps")
-st.sidebar.caption("ศูนย์ปฏิบัติการและเตือนภัยพิบัติ")
+st.sidebar.caption("ศูนย์ปฏิบัติการและเตือนภัยพิบัติอัจฉริยะ")
 st.sidebar.divider()
 f_priority = st.sidebar.multiselect("ระดับความรุนแรง", list(PRIORITY_HEX), default=list(PRIORITY_HEX))
 f_status = st.sidebar.multiselect("สถานะการดำเนินงาน", STATUSES, default=STATUSES)
@@ -206,9 +202,9 @@ if f_keyword:
 # ================== Header ==================
 now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 st.markdown(
-    f'<div class="hero"><span class="badge">● LIVE</span><span class="badge">อัปเดตล่าสุด {now}</span>'
+    f'<div class="hero"><span class="badge">● LIVE SYSTEM</span><span class="badge">อัปเดตล่าสุด {now}</span>'
     f'<h1>ศูนย์ปฏิบัติการและเตือนภัยพิบัติแห่งชาติ</h1>'
-    f'<p>National Disaster Operations Center — ระบบรับแจ้งเหตุ วิเคราะห์ความรุนแรง และติดตามการช่วยเหลือทั่วประเทศ</p></div>',
+    f'<p>National Disaster Operations Center — ระบบรับแจ้งเหตุ วิเคราะห์ AI แจ้งเตือนภัย และติดตามการช่วยเหลือ</p></div>',
     unsafe_allow_html=True,
 )
 
@@ -219,7 +215,6 @@ active = int((df["Status"] == "กำลังช่วยเหลือ").sum(
 done = int((df["Status"] == "ดำเนินการเสร็จสิ้น").sum())
 pct = (done / total * 100) if total else 0
 
-
 def kpi(col, label, value, sub, color):
     col.markdown(
         f'<div class="kpi" style="border-top:4px solid {color}"><div class="label">{label}</div>'
@@ -227,19 +222,27 @@ def kpi(col, label, value, sub, color):
         unsafe_allow_html=True,
     )
 
-
 k1, k2, k3, k4 = st.columns(4)
 kpi(k1, "เหตุการณ์ทั้งหมด", total, f"ใน {df['Province'].nunique()} จังหวัด", "#1565c0")
 kpi(k2, "ระดับวิกฤต", crit, "ต้องช่วยเหลือทันที", "#d92d20")
 kpi(k3, "กำลังช่วยเหลือ", active, "เจ้าหน้าที่ลงพื้นที่แล้ว", "#f79009")
 kpi(k4, "ดำเนินการเสร็จสิ้น", done, f"คิดเป็น {pct:.0f}% ของทั้งหมด", "#12b76a")
 
+# ฟีเจอร์เตือนภัยวิกฤต & Hotspot พื้นที่เสี่ยง
 pending_crit = df[(df["Priority"] == "วิกฤต") & (df["Status"] != "ดำเนินการเสร็จสิ้น")]
 if not pending_crit.empty:
     last = pending_crit.iloc[-1]
     st.markdown(
         f'<div class="alert-bar"><b>⚠ แจ้งเตือนเหตุวิกฤต {len(pending_crit)} รายการที่ยังไม่เสร็จสิ้น</b> — '
         f'ล่าสุด {last["ID"]} จังหวัด{last["Province"]}: {html.escape(last["Text"])}</div>',
+        unsafe_allow_html=True,
+    )
+
+hotspots = df[df["Priority"] == "วิกฤต"]["Province"].value_counts()
+if not hotspots.empty and hotspots.iloc[0] >= 1:
+    top_hotspot = hotspots.index[0]
+    st.markdown(
+        f'<div class="hotspot-bar"><b>🚨 ระบบ AI วิเคราะห์พบพื้นที่เสี่ยงสูงสุด (Hotspot):</b> จังหวัด<b>{top_hotspot}</b> มีรายงานเคสวิกฤตสะสมสูงสุด ควรจัดสรรชุดปฏิบัติการเสริมด่วน</div>',
         unsafe_allow_html=True,
     )
 
@@ -254,47 +257,62 @@ with tab1:
         map_obj = build_map(fdf)
         components.html(map_obj.get_root().render(), height=530)
         legend = " ".join(f'<span class="pill" style="background:{c}">{p}</span>' for p, c in PRIORITY_HEX.items())
-        st.markdown(f"คำอธิบายสี: {legend} &nbsp; <small>คลิกที่จุดบนแผนที่เพื่อดูรายละเอียด</small>", unsafe_allow_html=True)
+        st.markdown(f"คำอธิบายสี: {legend} &nbsp; <small>คลิกจุดบนแผนที่เพื่อดูรายละเอียด</small>", unsafe_allow_html=True)
 
     with c_feed:
         st.markdown("#### เหตุการณ์ล่าสุด")
         if fdf.empty:
             st.info("ไม่พบเหตุการณ์ตามเงื่อนไขที่เลือก")
-        for _, r in fdf.iloc[::-1].head(6).iterrows():
+        for _, r in fdf.iloc[::-1].head(5).iterrows():
+            img_tag = f'<br><img src="data:image/jpeg;base64,{r["Image"]}" style="width:100%;max-height:120px;object-fit:cover;border-radius:8px;margin-top:6px;">' if r["Image"] else ""
             st.markdown(
                 f'<div class="feed"><span class="pill" style="background:{PRIORITY_HEX[r["Priority"]]}">{r["Priority"]}</span>'
                 f'<span class="pill pill-gray">{r["Status"]}</span><br>'
                 f'<b>{r["ID"]} • {r["Province"]}</b> — {r["Type"]}<br>'
-                f'<span style="font-size:14px">{html.escape(r["Text"][:90])}</span><br>'
+                f'<span style="font-size:14px">{html.escape(r["Text"][:80])}</span>{img_tag}<br>'
                 f'<span class="meta">{r["Time"]} • {html.escape(r["Reporter"])}</span></div>',
                 unsafe_allow_html=True,
             )
 
 # ---------- Tab 2: แจ้งเหตุ ----------
 with tab2:
-    st.markdown("#### แบบฟอร์มรับแจ้งเหตุ")
-    st.caption("ระบบจะวิเคราะห์ประเภทภัย ระดับความรุนแรง ความต้องการ และจังหวัดจากข้อความให้อัตโนมัติ")
+    st.markdown("#### แบบฟอร์มรับแจ้งเหตุอัจฉริยะ")
+    st.caption("ระบบ AI จะวิเคราะห์ประเภทภัย ระดับความรุนแรง ความต้องการ และพิกัดจังหวัดให้อัตโนมัติ")
+    
     with st.form("report_form", clear_on_submit=True):
-        text = st.text_area("รายละเอียดเหตุการณ์", height=140,
+        text = st.text_area("รายละเอียดเหตุการณ์", height=130,
                             placeholder="เช่น ด่วน! น้ำท่วมสูง อำเภอเมือง จังหวัดขอนแก่น มีผู้สูงอายุติดอยู่ในบ้าน ต้องการเรืออพยพ")
         a, b = st.columns(2)
-        prov_choice = a.selectbox("จังหวัด", ["ตรวจจับอัตโนมัติจากข้อความ"] + list(PROVINCES))
+        prov_choice = a.selectbox("จังหวัด (เลือกเพื่อให้ระบบล็อกตำแหน่ง)", ["ตรวจจับอัตโนมัติจากข้อความ"] + list(PROVINCES))
         reporter = b.text_input("หน่วยงาน / ผู้แจ้ง (ไม่บังคับ)")
-        submitted = st.form_submit_button("ส่งรายงานเข้าศูนย์ปฏิบัติการ")
+        uploaded_file = st.file_uploader("แนบรูปภาพหลักฐานความเสียหาย (ถ้ามี)", type=["jpg", "jpeg", "png"])
+        submitted = st.form_submit_button("🚀 ส่งรายงานเข้าศูนย์ปฏิบัติการ")
 
     if submitted:
         if not text.strip():
             st.warning("กรุณากรอกรายละเอียดเหตุการณ์")
         else:
+            import base64
+            img_b64 = None
+            if uploaded_file is not None:
+                img_bytes = uploaded_file.getvalue()
+                img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
             override = None if prov_choice.startswith("ตรวจจับ") else prov_choice
-            rec = new_record(text.strip(), reporter.strip(), province=override)
+            rec = new_record(text.strip(), reporter.strip(), province=override, image=img_b64)
             st.session_state.incidents.append(rec)
             st.session_state.last = rec
             st.rerun()
 
     if "last" in st.session_state:
         r = st.session_state.last
-        st.success(f"บันทึกเหตุ {r['ID']} เข้าสู่ระบบเรียบร้อย")
+        st.success(f"บันทึกเหตุ {r['ID']} เข้าสู่ระบบเรียบร้อยแล้ว!")
+        
+        # ฟีเจอร์จำลองการส่ง SMS/LINE Alert
+        if r["Priority"] == "วิกฤต":
+            if st.button("📲 จำลองส่ง SMS และ LINE Alert ไปยังทีมกู้ภัยด่วน"):
+                st.toast(f"ส่งการแจ้งเตือนเคส {r['ID']} ไปยังเครือข่ายกู้ภัยและผู้ว่าราชการจังหวัด {r['Province']} สำเร็จ!", icon="🚨")
+        
         x1, x2, x3, x4 = st.columns(4)
         x1.metric("จังหวัด", r["Province"])
         x2.metric("ประเภทภัย", r["Type"])
@@ -313,7 +331,7 @@ with tab3:
         file_name=f"disaster_report_{datetime.now():%Y%m%d_%H%M}.csv",
         mime="text/csv",
     )
-    st.dataframe(fdf.iloc[::-1][list(THAI_COLS)].rename(columns=THAI_COLS), hide_index=True)
+    st.dataframe(fdf.drop(columns=["lat", "lon", "Image"], errors="ignore").iloc[::-1][list(THAI_COLS)].rename(columns=THAI_COLS), hide_index=True)
 
     if not df.empty:
         st.markdown("#### อัปเดตสถานะการช่วยเหลือ")
@@ -327,14 +345,13 @@ with tab3:
                     inc["Status"] = new_status
             st.rerun()
 
-# ---------- Tab 4: สถิติ ----------
+# ---------- Tab 4: สถิติและวิเคราะห์ ----------
 STATUS_HEX = {"รอรับเรื่อง": "#98a2b3", "กำลังช่วยเหลือ": "#f79009", "ดำเนินการเสร็จสิ้น": "#12b76a"}
 TYPE_HEX = {"อุทกภัย / น้ำท่วม": "#1570ef", "วาตภัย / พายุ": "#7a5af8", "ดินถล่ม": "#b54708",
             "อัคคีภัย / ไฟป่า": "#d92d20", "อื่น ๆ / ทั่วไป": "#667085"}
 PRIO_SCALE = alt.Scale(domain=list(PRIORITY_HEX), range=list(PRIORITY_HEX.values()))
 STATUS_SCALE = alt.Scale(domain=list(STATUS_HEX), range=list(STATUS_HEX.values()))
 TYPE_SCALE = alt.Scale(domain=list(TYPE_HEX), range=list(TYPE_HEX.values()))
-
 
 def style_chart(chart, height=300):
     return (
@@ -346,7 +363,6 @@ def style_chart(chart, height=300):
         .configure_legend(labelFontSize=13, orient="bottom")
     )
 
-
 def donut_chart(data, field, scale):
     counts = data[field].value_counts().reset_index()
     counts.columns = ["Label", "Count"]
@@ -356,10 +372,10 @@ def donut_chart(data, field, scale):
         color=alt.Color("Label:N", scale=scale, legend=alt.Legend(title=None)),
         tooltip=[alt.Tooltip("Label:N", title="หมวด"), alt.Tooltip("Count:Q", title="จำนวน")],
     )
-    center = alt.Chart(pd.DataFrame({"t": [f"{total_n} เหตุ"]})).mark_text(
-        fontSize=28, fontWeight="bold", color="#101828").encode(text="t:N")
-    return style_chart(arc + center, 320)
-
+    center = alt.Chart(alt.Data(values=[{}] )).mark_text(
+        fontSize=26, fontWeight="bold", color="#101828", text=f"{total_n} เหตุ"
+    ) # simple static text for center
+    return style_chart(arc, 320)
 
 def hbar_chart(counts, scale=None, color="#1565c0"):
     order = counts["Label"].tolist()
@@ -376,17 +392,16 @@ def hbar_chart(counts, scale=None, color="#1565c0"):
     labels = base.mark_text(align="left", dx=6, fontSize=13, fontWeight="bold", color="#344054").encode(text="Count:Q")
     return style_chart(bars + labels, max(160, 44 * len(counts)))
 
-
 with tab4:
     if fdf.empty:
         st.info("ยังไม่มีข้อมูลสำหรับแสดงสถิติ")
     else:
-        st.markdown("#### ภาพรวมเชิงวิเคราะห์")
-        st.caption("ตัวเลขทั้งหมดในหน้านี้คำนวณตามตัวกรองที่เลือกไว้ในแถบด้านซ้าย")
+        st.markdown("#### ภาพรวมเชิงวิเคราะห์และ AI Insights")
+        st.caption("ข้อมูลวิเคราะห์เชิงลึกประมวลผลจากเงื่อนไขตัวกรองในแถบด้านซ้าย")
 
         f_total = len(fdf)
         f_done = int((fdf["Status"] == "ดำเนินการเสร็จสิ้น").sum())
-        f_rate = f_done / f_total * 100
+        f_rate = f_done / f_total * 100 if f_total else 0
         f_crit_pending = int(((fdf["Priority"] == "วิกฤต") & (fdf["Status"] != "ดำเนินการเสร็จสิ้น")).sum())
         top_prov = fdf["Province"].value_counts()
         top_type = fdf["Type"].value_counts()
@@ -400,7 +415,6 @@ with tab4:
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
         st.progress(f_rate / 100, text=f"ความคืบหน้าการช่วยเหลือโดยรวม {f_rate:.0f}%")
 
-        # แถวที่ 1: กราฟวงแหวน
         r1a, r1b = st.columns(2)
         with r1a:
             with st.container(border=True):
@@ -411,7 +425,6 @@ with tab4:
                 st.markdown("**สถานะการดำเนินงาน**")
                 st.altair_chart(donut_chart(fdf, "Status", STATUS_SCALE))
 
-        # แถวที่ 2: จังหวัด + ประเภทภัย
         r2a, r2b = st.columns([3, 2])
         with r2a:
             with st.container(border=True):
@@ -435,7 +448,6 @@ with tab4:
                 tc.columns = ["Label", "Count"]
                 st.altair_chart(hbar_chart(tc, scale=TYPE_SCALE))
 
-        # แถวที่ 3: ความต้องการ + ตารางสรุป
         r3a, r3b = st.columns([2, 3])
         with r3a:
             with st.container(border=True):
@@ -471,5 +483,5 @@ with tab4:
                     },
                 )
 
-st.markdown('<div class="footer">© 2026 DisasterOps Thailand • ระบบต้นแบบสำหรับการสาธิต • ข้อมูลในระบบเป็นข้อมูลจำลอง</div>',
+st.markdown('<div class="footer">© 2026 DisasterOps Thailand • ระบบปฏิบัติการอัจฉริยะเพื่อการสาธิต • ข้อมูลจำลอง</div>',
             unsafe_allow_html=True)
